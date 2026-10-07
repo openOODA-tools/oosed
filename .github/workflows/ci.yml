@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: oosed
+
+      - uses: actions/checkout@v4
+        with:
+          repository: openOODA/oodac
+          path: oodac
+
+      - uses: actions/checkout@v4
+        with:
+          repository: openOODA/oodar
+          path: oodar
+
+      - uses: actions/checkout@v4
+        with:
+          repository: openOODA/std
+          path: std
+
+      - name: Require compiler and clang
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -x oodac/bin/oodac || chmod +x oodac/bin/oodac
+          if ! command -v clang >/dev/null; then sudo apt-get update && sudo apt-get install -y clang; fi
+          command -v clang >/dev/null || { echo "clang required for oodac build (LLVM IR + oodar)"; exit 1; }
+
+      - name: Build oodar libs
+        working-directory: ${{ github.workspace }}
+        run: make -C oodar/scripts -f Makefile modular
+
+      - name: Build, verify, and test
+        working-directory: ${{ github.workspace }}/oosed
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+        run: |
+          make verify
+          make build
+          make test
+
+      - name: Verify packaging (.deb, .rpm, and arch)
+        working-directory: ${{ github.workspace }}/oosed
+        run: |
+          sudo apt-get install -y -qq rpm
+          make package-deb
+          make package-rpm
+          make package-arch
+          ls -la dist/*.deb dist/*.rpm dist/*.pkg.tar.zst
+          sudo dpkg -i dist/oosed_*_amd64.deb
+          /usr/bin/oosed --version
+
+      - name: Verify PKGBUILD, installer, and uninstaller
+        working-directory: ${{ github.workspace }}/oosed
+        run: |
+          test -f packaging/PKGBUILD
+          grep -q "pkgname=oosed" packaging/PKGBUILD
+          bash install.sh --help
+          bash install.sh --dry-run
+          bash install.sh --uninstall --dry-run
+          bash uninstall.sh --help
+          bash uninstall.sh --dry-run
