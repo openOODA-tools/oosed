@@ -1,0 +1,14 @@
+// # Engine Subsystem Anchor
+//
+// Logline: Re-exports pattern substitution, command grammar, and stream execution.
+//
+// Setup: Pure shim re-exporting engine domain pages.
+//
+// Beats:
+//   1. Re-export substring match and replacement primitives.
+//   2. Re-export sed command parser.
+//   3. Re-export stream execution pipeline.
+
+import "subst.oo";
+import "command.oo";
+import "execute.oo";

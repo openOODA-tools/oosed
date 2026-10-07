@@ -1,0 +1,3 @@
+dist/
+.ooda-cache/
+*.sha256

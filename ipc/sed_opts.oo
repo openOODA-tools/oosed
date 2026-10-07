@@ -1,0 +1,69 @@
+// # Sed Options - Command Line Flags and Script Configuration
+//
+// Logline: Decodes command line arguments into structured options for oosed.
+//
+// Setup: Pure value type and parser. Zero ambient authority.
+//
+// Beats:
+//   1. Define SedOpts struct encapsulating scripts, files, and in-place flags.
+//   2. Provide safe default initializer.
+//   3. Parse argument vector into validated SedOpts model.
+
+pub type SedOpts = struct {
+    script: String,
+    in_place: Bool,
+    quiet: Bool,
+    input_file: String,
+    mcp_mode: Bool,
+    help_mode: Bool,
+    version_mode: Bool,
+    error_msg: String
+};
+
+pub fn sed_opts_default() -> SedOpts {
+    return SedOpts {
+        script: "",
+        in_place: false,
+        quiet: false,
+        input_file: "",
+        mcp_mode: false,
+        help_mode: false,
+        version_mode: false,
+        error_msg: ""
+    };
+}
+
+pub fn parse_sed_args(args: List[String]) -> SedOpts {
+    let mut opts: SedOpts = sed_opts_default();
+    let n: Int = list_len(args);
+    let mut i: Int = 0;
+    while i < n {
+        let arg: String = list_get(args, i);
+        if arg == "-h" || arg == "--help" {
+            opts.help_mode = true;
+            return opts;
+        } else if arg == "-v" || arg == "--version" {
+            opts.version_mode = true;
+            return opts;
+        } else if arg == "--mcp" {
+            opts.mcp_mode = true;
+        } else if arg == "-i" || arg == "--in-place" {
+            opts.in_place = true;
+        } else if arg == "-n" || arg == "--quiet" || arg == "--silent" {
+            opts.quiet = true;
+        } else if arg == "-e" {
+            i = i + 1;
+            if i < n { opts.script = list_get(args, i); }
+        } else if str_starts_with(arg, "-e=") {
+            opts.script = str_slice(arg, 3, chars_len(arg));
+        } else if !str_starts_with(arg, "-") {
+            if opts.script == "" {
+                opts.script = arg;
+            } else if opts.input_file == "" {
+                opts.input_file = arg;
+            }
+        }
+        i = i + 1;
+    }
+    return opts;
+}

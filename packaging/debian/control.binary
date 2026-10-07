@@ -1,0 +1,10 @@
+Package: oosed
+Version: 0.1.0-1
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: openOODA-tools <ops@openooda.org>
+Description: Capability-bounded stream editor and text transformer
+ A stream editor and text transformer written in pure openOODA, featuring negative-trust capability security, safe in-place writes, and MCP stdio surface.
+ negative-trust capability security, syntax highlighting via oote themes,
+ line numbering, range windowing, and an MCP stdio surface.

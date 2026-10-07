@@ -1,0 +1,140 @@
+// # MCP Stdio Server - Stream Transformation Engine
+//
+// Logline: Speaks Model Context Protocol over stdio for LLM coding agents.
+//
+// Setup: Requires FsReadCap. Dispatches stream_replace and execute_script tools.
+//
+// Beats:
+//   1. Handle initialize and notifications/initialized lifecycle handshakes.
+//   2. Advertise stream_replace and execute_script tools with JSON schemas.
+//   3. Dispatch tools/call requests and return transformed stream contents.
+
+import "engine/subst.oo";
+import "engine/command.oo";
+import "engine/execute.oo";
+import "ipc/json_field.oo";
+
+fn build_error(id: String, code: Int, msg: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + to_string(code) + ",\"message\":\"" + json_escape(msg) + "\"}}";
+}
+
+fn build_tool_result(id: String, text: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) + "\"}]}}";
+}
+
+fn split_lines(text: String) -> List[String] {
+    let mut items: List[String] = list_new();
+    let n: Int = chars_len(text);
+    let mut cur: String = "";
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(text, i);
+        if c == "\n" {
+            if chars_len(cur) > 0 { items = list_push(items, cur); }
+            cur = "";
+        } else if c == "\\" && i + 1 < n && char_at(text, i + 1) == "n" {
+            if chars_len(cur) > 0 { items = list_push(items, cur); }
+            cur = "";
+            i = i + 1;
+        } else if c != "\r" {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    if chars_len(cur) > 0 { items = list_push(items, cur); }
+    return items;
+}
+
+fn join_lines(lines: List[String]) -> String {
+    let mut out: String = "";
+    let n: Int = list_len(lines);
+    let mut i: Int = 0;
+    while i < n {
+        out = out + list_get(lines, i) + "\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+fn handle_tool_call(id: String, req: String) -> String {
+    let params: String = json_field_raw(req, "params");
+    let tool_name: String = json_field_string(params, "name");
+    let args: String = json_field_raw(params, "arguments");
+
+    if tool_name == "stream_replace" {
+        let text: String = json_field_string(args, "text");
+        let pattern: String = json_field_string(args, "pattern");
+        let repl: String = json_field_string(args, "replacement");
+        let g_raw: String = json_field_raw(args, "global");
+        let is_g: Bool = g_raw == "true";
+        let out: String = subst_replace(text, pattern, repl, is_g);
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "execute_script" {
+        let text: String = json_field_string(args, "text");
+        let script: String = json_field_string(args, "script");
+        let cmd: SedCommand = parse_sed_command(script);
+        let lines: List[String] = split_lines(text);
+        let processed: List[String] = execute_stream(lines, cmd, false);
+        let out: String = join_lines(processed);
+        return build_tool_result(id, out);
+    }
+
+    return build_error(id, -32601, "unknown tool: " + tool_name);
+}
+
+fn handle_mcp_request(req: String) -> String {
+    let method: String = json_field_string(req, "method");
+    let raw_id: String = json_field_raw(req, "id");
+    let id: String = if chars_len(raw_id) == 0 { "null" } else { raw_id };
+
+    if method == "initialize" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"oosed\",\"version\":\"0.1.0\"}}}";
+    }
+    if method == "notifications/initialized" {
+        return "";
+    }
+    if method == "tools/list" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[{\"name\":\"stream_replace\",\"description\":\"Replace pattern occurrences in text\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"pattern\":{\"type\":\"string\"},\"replacement\":{\"type\":\"string\"},\"global\":{\"type\":\"boolean\"}},\"required\":[\"text\",\"pattern\",\"replacement\"]}},{\"name\":\"execute_script\",\"description\":\"Execute sed script (s/find/repl/g, /pat/d) on text\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"script\":{\"type\":\"string\"}},\"required\":[\"text\",\"script\"]}}]}}";
+    }
+    if method == "tools/call" {
+        return handle_tool_call(id, req);
+    }
+    if method == "shutdown" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}";
+    }
+    return build_error(id, -32601, "method not found: " + method);
+}
+
+pub fn run_mcp_server(fs: &FsReadCap) -> Int {
+    let mut buf: String = "";
+    let mut running: Bool = true;
+    while running {
+        let mut nl: Int = str_index_of(buf, "\n");
+        while nl >= 0 {
+            let line: String = str_trim(str_slice(buf, 0, nl));
+            buf = str_slice(buf, nl + 1, chars_len(buf));
+            if chars_len(line) > 0 {
+                let resp: String = handle_mcp_request(line);
+                if chars_len(resp) > 0 {
+                    println(resp);
+                }
+            }
+            nl = str_index_of(buf, "\n");
+        }
+
+        let cr: Result[String, String] = oo_read_stdin_chunk(fs, 100);
+        if !cr.is_ok() {
+            running = false;
+        } else {
+            let chunk: String = match cr { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                running = false;
+            } else {
+                buf = buf + chunk;
+            }
+        }
+    }
+    return 0;
+}

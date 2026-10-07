@@ -1,0 +1,56 @@
+// # String Substitution Engine - Match and Replace Primitives
+//
+// Logline: Implements substring search and replacement logic for stream editing.
+//
+// Setup: Pure string manipulation algorithm. Zero ambient authority.
+//
+// Beats:
+//   1. Search for substring occurrences starting at given character offset.
+//   2. Replace single or all non-overlapping matches with replacement text.
+//   3. Return unmodified string when pattern is empty or not found.
+
+pub fn find_substring_from(text: String, needle: String, start_idx: Int) -> Int {
+    let t_len: Int = chars_len(text);
+    let n_len: Int = chars_len(needle);
+    if n_len == 0 { return -1; }
+    if t_len < n_len { return -1; }
+    let limit: Int = t_len - n_len;
+    let mut i: Int = start_idx;
+    while i <= limit {
+        let slice: String = str_slice(text, i, i + n_len);
+        if slice == needle {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+pub fn subst_replace(
+    text: String,
+    needle: String,
+    replacement: String,
+    global: Bool
+) -> String {
+    let n_len: Int = chars_len(needle);
+    if n_len == 0 { return text; }
+    let mut out: String = "";
+    let mut cursor: Int = 0;
+    let mut running: Bool = true;
+
+    while running {
+        let hit: Int = find_substring_from(text, needle, cursor);
+        if hit < 0 {
+            out = out + str_slice(text, cursor, chars_len(text));
+            running = false;
+        } else {
+            out = out + str_slice(text, cursor, hit) + replacement;
+            cursor = hit + n_len;
+            if !global {
+                out = out + str_slice(text, cursor, chars_len(text));
+                running = false;
+            }
+        }
+    }
+    return out;
+}

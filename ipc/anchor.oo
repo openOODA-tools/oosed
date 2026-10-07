@@ -1,0 +1,14 @@
+// # IPC Subsystem Anchor
+//
+// Logline: Re-exports CLI argument parsing, JSON serialization, and MCP server.
+//
+// Setup: Pure shim re-exporting ipc domain pages.
+//
+// Beats:
+//   1. Re-export CLI sed option parser.
+//   2. Re-export JSON field extraction primitives.
+//   3. Re-export MCP stdio server engine.
+
+import "sed_opts.oo";
+import "json_field.oo";
+import "mcp_serve.oo";

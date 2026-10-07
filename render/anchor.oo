@@ -1,0 +1,10 @@
+// # Render Subsystem Anchor
+//
+// Logline: Re-exports theme hydration and terminal styling primitives.
+//
+// Setup: Pure shim re-exporting render domain pages.
+//
+// Beats:
+//   1. Re-export theme resolution and ANSI terminal resets.
+
+import "render_theme.oo";

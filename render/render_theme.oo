@@ -1,0 +1,79 @@
+// # Theme and Terminal Renderer - Color Palettes and Styling
+//
+// Logline: Hydrates terminal palette from ~/.openooda/theme.oot for diff and syntax highlights.
+//
+// Setup: Requires FsReadCap and EnvCap. Operates with zero ambient authority.
+//
+// Beats:
+//   1. Resolve theme name from OODA_THEME or ~/.openooda/theme.oot with fallback.
+//   2. Map edit additions and deletions to theme color codes.
+//   3. Provide ANSI terminal reset and formatting primitives.
+
+import "std/fs/process/env.oo";
+
+pub fn ansi_esc() -> String {
+    return bytes_to_str(bytes_push(bytes_new(), 27));
+}
+
+pub fn term_reset() -> String {
+    return ansi_esc() + "[0m";
+}
+
+pub fn parse_theme_val(line: String, key: String) -> String {
+    let trimmed: String = str_trim(line);
+    if !str_starts_with(trimmed, key) { return ""; }
+    let rest: String = str_trim(str_slice(trimmed, chars_len(key), chars_len(trimmed)));
+    if !str_starts_with(rest, "=") { return ""; }
+    let mut val: String = str_trim(str_slice(rest, 1, chars_len(rest)));
+    if str_starts_with(val, "\"") && str_ends_with(val, "\"") {
+        let n: Int = chars_len(val);
+        if n >= 2 { val = str_slice(val, 1, n - 1); }
+    }
+    return val;
+}
+
+pub fn parse_theme_key(content: String, key: String) -> String {
+    let n: Int = chars_len(content);
+    let mut cur: String = "";
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(content, i);
+        if c == "\n" {
+            let v: String = parse_theme_val(cur, key);
+            if v != "" { return v; }
+            cur = "";
+        } else if c != "\r" {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    if cur != "" {
+        let v: String = parse_theme_val(cur, key);
+        if v != "" { return v; }
+    }
+    return "";
+}
+
+pub fn resolve_sed_theme(fs: &FsReadCap, env: &EnvCap) -> String {
+    let env_t: Result[String, String] = env_get(env, "OODA_THEME");
+    if env_t.is_ok() {
+        let t: String = match env_t { Ok(s) => s, Err(_) => "" };
+        if t != "" { return t; }
+    }
+    let env_home: Result[String, String] = env_get(env, "OODA_HOME");
+    let mut home: String = match env_home { Ok(s) => s, Err(_) => "" };
+    if home == "" {
+        let env_w: Result[String, String] = env_get(env, "OODA_FS_WRITEDIR");
+        home = match env_w { Ok(s) => s, Err(_) => "" };
+    }
+    if home == "" {
+        let env_h: Result[String, String] = env_get(env, "HOME");
+        home = match env_h { Ok(s) => s, Err(_) => "" };
+    }
+    let p: String = if str_ends_with(home, "/") { home + ".openooda/theme.oot" } else { home + "/.openooda/theme.oot" };
+    let r: Result[String, String] = read_file(fs, p);
+    if r.is_err() { return "classic/1982"; }
+    let content: String = match r { Ok(s) => s, Err(_) => "" };
+    let t: String = parse_theme_key(content, "theme");
+    return if t != "" { t } else { "classic/1982" };
+}

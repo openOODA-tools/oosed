@@ -1,0 +1,14 @@
+Source: oosed
+Section: utils
+Priority: optional
+Maintainer: openOODA-tools <ops@openooda.org>
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13)
+
+Package: oosed
+Architecture: amd64
+Depends: libc6
+Description: Capability-bounded stream editor and text transformer
+ A stream editor and text transformer written in pure openOODA, featuring negative-trust capability security, safe in-place writes, and MCP stdio surface.
+ negative-trust capability security, syntax highlighting via oote themes,
+ line numbering, range windowing, and an MCP stdio surface.

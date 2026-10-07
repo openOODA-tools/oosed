@@ -1,0 +1,77 @@
+// # Sed Pipeline Executor - Stream Transformation Engine
+//
+// Logline: Applies parsed SedCommand transformations to input text line sequences.
+//
+// Setup: Pure text stream processing engine. Zero ambient authority.
+//
+// Beats:
+//   1. Evaluate pattern matches and conditional branch instructions per line.
+//   2. Apply in-place string replacements and deletion filters.
+//   3. Honor quiet mode suppression and explicit print commands.
+
+import "subst.oo";
+import "command.oo";
+
+pub fn process_single_line(
+    line: String,
+    cmd: SedCommand,
+    quiet: Bool
+) -> List[String] {
+    let mut out: List[String] = list_new();
+
+    if cmd.kind == "subst" {
+        let transformed: String = subst_replace(line, cmd.pattern, cmd.replacement, cmd.global);
+        if !quiet {
+            out = list_push(out, transformed);
+        }
+        return out;
+    }
+
+    if cmd.kind == "delete" {
+        let matches: Bool = if chars_len(cmd.pattern) > 0 { str_contains(line, cmd.pattern) } else { true };
+        if !matches && !quiet {
+            out = list_push(out, line);
+        }
+        return out;
+    }
+
+    if cmd.kind == "print" {
+        let matches: Bool = if chars_len(cmd.pattern) > 0 { str_contains(line, cmd.pattern) } else { true };
+        if matches {
+            out = list_push(out, line);
+        }
+        if !quiet {
+            out = list_push(out, line);
+        }
+        return out;
+    }
+
+    if !quiet {
+        out = list_push(out, line);
+    }
+    return out;
+}
+
+pub fn execute_stream(
+    lines: List[String],
+    cmd: SedCommand,
+    quiet: Bool
+) -> List[String] {
+    let mut results: List[String] = list_new();
+    let n: Int = list_len(lines);
+    let mut i: Int = 0;
+
+    while i < n {
+        let line: String = list_get(lines, i);
+        let processed: List[String] = process_single_line(line, cmd, quiet);
+        let m: Int = list_len(processed);
+        let mut j: Int = 0;
+        while j < m {
+            results = list_push(results, list_get(processed, j));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    return results;
+}

@@ -1,0 +1,130 @@
+// # oosed Entry Point - Sovereign Stream Editor
+//
+// Logline: Argument gate, text stream pipeline router, and in-place file writer.
+//
+// Setup: Requires FsReadCap and FsWriteCap. ProcessCap sets standard exit status.
+//
+// Beats:
+//   1. Handle --help, --version, and --mcp early without side effects.
+//   2. Read text stream from file path or standard input.
+//   3. Apply transformations and emit to stdout or write in-place with capability bounds.
+
+import "engine/anchor.oo";
+import "render/anchor.oo";
+import "ipc/anchor.oo";
+
+fn read_all_stdin(fs: &FsReadCap) -> String {
+    let mut buf: String = "";
+    let mut running: Bool = true;
+    while running {
+        let chunk_res: Result[String, String] = oo_read_stdin_chunk(fs, 100);
+        if !chunk_res.is_ok() {
+            running = false;
+        } else {
+            let chunk: String = match chunk_res { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                running = false;
+            } else {
+                buf = buf + chunk;
+            }
+        }
+    }
+    return buf;
+}
+
+fn split_lines(content: String) -> List[String] {
+    let mut lines: List[String] = list_new();
+    let n: Int = chars_len(content);
+    let mut cur: String = "";
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(content, i);
+        if c == "\n" {
+            lines = list_push(lines, cur);
+            cur = "";
+        } else if c != "\r" {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    if chars_len(cur) > 0 { lines = list_push(lines, cur); }
+    return lines;
+}
+
+fn render_help() -> String {
+    return "Usage: oosed [OPTIONS] [SCRIPT] [FILE]\n\n" +
+        "Sovereign capability-bounded stream editor.\n\n" +
+        "Options:\n" +
+        "  -e SCRIPT              Add the script to the commands to be executed\n" +
+        "  -i, --in-place         Edit files in place (requires FsWriteCap)\n" +
+        "  -n, --quiet, --silent  Suppress automatic printing of pattern space\n" +
+        "  --mcp                  Start Model Context Protocol stdio server\n" +
+        "  -h, --help             Display this help message and exit\n" +
+        "  -v, --version          Print version information and exit\n";
+}
+
+pub fn main(
+    fs: &FsReadCap,
+    fs_write: &FsWriteCap,
+    proc_cap: &ProcessCap,
+    env: &EnvCap,
+    args: List[String]
+) -> Result[Int, String] {
+    let opts: SedOpts = parse_sed_args(args);
+
+    if opts.help_mode {
+        print(render_help());
+        return Ok(0);
+    }
+    if opts.version_mode {
+        println("oosed 0.1.0 (openOODA sovereign stream editor)");
+        return Ok(0);
+    }
+    if opts.mcp_mode {
+        run_mcp_server(fs);
+        return Ok(0);
+    }
+
+    let mut raw_content: String = "";
+    if opts.input_file != "" {
+        let r: Result[String, String] = read_file(fs, opts.input_file);
+        if r.is_err() {
+            println("oosed: cannot read file: " + opts.input_file);
+            process_exit(2);
+            return Ok(2);
+        }
+        raw_content = match r { Ok(s) => s, Err(_) => "" };
+    } else {
+        raw_content = read_all_stdin(fs);
+    }
+
+    let lines: List[String] = split_lines(raw_content);
+    let cmd: SedCommand = parse_sed_command(opts.script);
+    let processed: List[String] = execute_stream(lines, cmd, opts.quiet);
+
+    if opts.in_place && opts.input_file != "" {
+        let mut out: String = "";
+        let n: Int = list_len(processed);
+        let mut i: Int = 0;
+        while i < n {
+            out = out + list_get(processed, i) + "\n";
+            i = i + 1;
+        }
+        let wr: Result[Void, String] = write_file(fs_write, opts.input_file, out);
+        if wr.is_err() {
+            println("oosed: failed to write file in place: " + opts.input_file);
+            process_exit(2);
+            return Ok(2);
+        }
+        return Ok(0);
+    }
+
+    let n_out: Int = list_len(processed);
+    let mut j: Int = 0;
+    while j < n_out {
+        println(list_get(processed, j));
+        j = j + 1;
+    }
+
+    return Ok(0);
+}
