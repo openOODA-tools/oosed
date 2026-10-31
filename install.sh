@@ -180,6 +180,35 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 # --- Package Manager Installs (APT / DNF / PKGBUILD) ---------------------------
+
+# verify_sha256 <file> <url>: fetch the .sha256 sidecar and verify; refuse on mismatch/missing.
+verify_sha256() {
+    local f="$1" url="$2"
+    local sf tmp
+    sf="$(mktemp --suffix=.sha256)"
+    if ! curl -fsSL --max-time 15 "${url}.sha256" -o "$sf" 2>/dev/null; then
+        rm -f "$sf"
+        err "missing SHA-256 sidecar for $url; refuse unsigned install"
+        return 1
+    fi
+    local expected actual
+    expected="$(awk '{print $1}' "$sf" | tr -d '\r\n ')"
+    rm -f "$sf"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$f" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$f" | awk '{print $1}')"
+    else
+        err "no sha256sum/shasum; refuse unsigned install"
+        return 1
+    fi
+    if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+        err "SHA-256 mismatch for $f (expected $expected, got $actual)"
+        return 1
+    fi
+    ok "SHA-256 verified: ${actual:0:16}..."
+    return 0
+}
 if [ "$MODE" = "deb" ]; then
     step "Installing oosed via Debian package (.deb)"
     DEB_URL="${GITHUB_URL}/releases/download/${VERSION_PIN}/oosed_${RAW_VERSION}-1_amd64.deb"
@@ -193,6 +222,7 @@ if [ "$MODE" = "deb" ]; then
         TMP_DEB="./dist/oosed_${RAW_VERSION}-1_amd64.deb"
     else
         curl -fsSL "$DEB_URL" -o "$TMP_DEB"
+        verify_sha256 "$TMP_DEB" "$DEB_URL" || { rm -f "$TMP_DEB"; exit 1; }
     fi
     if command -v apt-get >/dev/null 2>&1; then
         sudo apt-get install -y -qq "$TMP_DEB"
@@ -215,11 +245,16 @@ if [ "$MODE" = "rpm" ]; then
         if [ -f "./dist/oosed-${RAW_VERSION}-1.x86_64.rpm" ]; then
             sudo dnf install -y -q "./dist/oosed-${RAW_VERSION}-1.x86_64.rpm"
         else
-            sudo dnf install -y -q "$RPM_URL"
+            TMP_RPM2="$(mktemp --suffix=.rpm)"
+            curl -fsSL "$RPM_URL" -o "$TMP_RPM2"
+            verify_sha256 "$TMP_RPM2" "$RPM_URL" || { rm -f "$TMP_RPM2"; exit 1; }
+            sudo dnf install -y -q "$TMP_RPM2"
+            rm -f "$TMP_RPM2"
         fi
     else
         TMP_RPM="$(mktemp --suffix=.rpm)"
         curl -fsSL "$RPM_URL" -o "$TMP_RPM"
+        verify_sha256 "$TMP_RPM" "$RPM_URL" || { rm -f "$TMP_RPM"; exit 1; }
         sudo rpm -Uvh "$TMP_RPM"
     fi
     ok "Installed oosed RPM package successfully."
@@ -272,6 +307,7 @@ else
         err "Neither curl nor wget is available."
         exit 1
     fi
+    verify_sha256 "$TMP_BIN" "$DOWNLOAD_URL" || { rm -f "$TMP_BIN"; exit 1; }
     chmod +x "$TMP_BIN"
     mv "$TMP_BIN" "$PREFIX/oosed"
     ok "Downloaded and installed $VERSION_PIN to $PREFIX/oosed"
