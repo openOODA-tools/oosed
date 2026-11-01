@@ -18,3 +18,7 @@
 # The cases come from the test recipe of this repository, so they are the
 # arguments this tool already claims to accept.
 
+match s/world/universe/
+match s/a/b/g
+match /foo/d
+match -n /foo/p
