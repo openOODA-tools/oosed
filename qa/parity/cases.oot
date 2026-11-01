@@ -1,0 +1,24 @@
+# Parity cases for oosed.
+# The tool replaces sed and must behave the same way.
+# upstream: sed
+# tool: dist/oosed
+#
+# A match case must produce the same stdout, the same stderr, and the same
+# exit code as the upstream tool. A differ case is a declared deviation: the
+# exit code must still be the same, but the output may differ.
+#
+# The upstream tool is the reference. A tool that is not a drop-in
+# replacement must fix the difference or declare the deviation here.
+#
+# The workflow installs the upstream tool. The parity runner reads this table
+# from the repository root and runs every case with the same arguments
+# against both tools. A case that the upstream tool does not understand is
+# skipped, because the upstream cannot be the reference there.
+#
+# The cases come from the test recipe of this repository, so they are the
+# arguments this tool already claims to accept.
+
+match s/world/universe/
+match s/a/b/g
+match /foo/d
+match -n /foo/p

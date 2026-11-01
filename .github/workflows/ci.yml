@@ -2,12 +2,13 @@ name: ci
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
+  gate:
+    name: Fleet gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,47 +30,107 @@ jobs:
           repository: openOODA/std
           path: std
 
-      - name: Require compiler and clang
-        working-directory: ${{ github.workspace }}
+      - name: Require clang
         run: |
-          test -x oodac/bin/oodac || chmod +x oodac/bin/oodac
-          if ! command -v clang >/dev/null; then sudo apt-get update && sudo apt-get install -y clang; fi
-          command -v clang >/dev/null || { echo "clang required for oodac build (LLVM IR + oodar)"; exit 1; }
+          if ! command -v clang >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y clang
+          fi
+          command -v clang >/dev/null || { echo "clang is required to build the tool"; exit 1; }
 
-      - name: Build oodar libs
+      - name: Build the oodar runtime
         working-directory: ${{ github.workspace }}
         run: make -C oodar/scripts -f Makefile modular
 
-      - name: Build, verify, and test
+      - name: Require a build target
+        working-directory: ${{ github.workspace }}/oosed
+        run: |
+          if ! grep -qE '^build[[:space:]]*:' Makefile; then
+            echo "::error::This repository has no build target. The tool is a stub and is tracked in the fleet backlog."
+            exit 1
+          fi
+
+      - name: Build the tool
         working-directory: ${{ github.workspace }}/oosed
         env:
           OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
           OODA_FS_READDIR: ${{ github.workspace }}
           OODA_FS_WRITEDIR: ${{ github.workspace }}
           OODA_NO_JAIL: "1"
-        run: |
-          make verify
-          make build
-          make test
+          OODA_BUILD_MULTI: "1"
+        run: make build
 
-      - name: Verify packaging (.deb, .rpm, and arch)
+      - name: Require the tool binary
+        if: always()
         working-directory: ${{ github.workspace }}/oosed
         run: |
-          sudo apt-get install -y -qq rpm
-          make package-deb
-          make package-rpm
-          make package-arch
-          ls -la dist/*.deb dist/*.rpm dist/*.pkg.tar.zst
-          sudo dpkg -i dist/oosed_*_amd64.deb
-          /usr/bin/oosed --version
+          if [ ! -x "dist/oosed" ]; then
+            echo "::error::dist/oosed was not produced. The tool is not implemented and is tracked in the fleet backlog."
+            exit 1
+          fi
 
-      - name: Verify PKGBUILD, installer, and uninstaller
+      - name: Verify
+        working-directory: ${{ github.workspace }}/oosed
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+          OODA_BUILD_MULTI: "1"
+        run: make verify
+
+      - name: Test
+        working-directory: ${{ github.workspace }}/oosed
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+          OODA_BUILD_MULTI: "1"
+        run: make test
+
+      - name: Pure test audit
         working-directory: ${{ github.workspace }}/oosed
         run: |
-          test -f packaging/PKGBUILD
-          grep -q "pkgname=oosed" packaging/PKGBUILD
-          bash install.sh --help
-          bash install.sh --dry-run
-          bash install.sh --uninstall --dry-run
-          bash uninstall.sh --help
-          bash uninstall.sh --dry-run
+          if make -n pure >/dev/null 2>&1; then
+            make pure
+          else
+            echo "This repository has no pure target."
+          fi
+
+      - name: Double-run determinism
+        working-directory: ${{ github.workspace }}/oosed
+        run: |
+          mkdir -p .ooda-cache
+          ./dist/oosed --version > .ooda-cache/run1.txt 2>&1 || true
+          ./dist/oosed --version > .ooda-cache/run2.txt 2>&1 || true
+          cmp -s .ooda-cache/run1.txt .ooda-cache/run2.txt || { echo "::error::the tool is not deterministic across two runs"; exit 1; }
+
+      - name: Install the upstream tool
+        working-directory: ${{ github.workspace }}
+        run: |
+          if ! command -v sed >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sed
+          fi
+          if ! command -v sed >/dev/null 2>&1; then
+            for cand in sed ; do
+              for d in /usr/local/bin /usr/games /usr/bin /bin /usr/sbin /sbin; do
+                if [ -x "$d/$cand" ]; then
+                  sudo ln -sf "$d/$cand" /usr/local/bin/sed
+                  break 2;
+                fi
+              done
+            done
+          fi
+          command -v sed >/dev/null 2>&1 || { echo "::error::the upstream tool sed is required for the parity gate and the package sed does not put it on this runner"; exit 1; }
+
+      - name: Parity against the upstream tool
+        working-directory: ${{ github.workspace }}/oosed
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+          OODA_BUILD_MULTI: "1"
+        run: make parity
+

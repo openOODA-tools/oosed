@@ -1,0 +1,241 @@
+// # Parity Runner - Compares The Tool Against The Tool It Replaces
+// Logline: Runs the upstream tool and the built tool with the same arguments and reports every difference.
+// Setup: Needs ProcessCap to run both binaries and FsReadCap to read the case table.
+// Beats:
+//   1. Read the upstream tool and the tool under test out of the case table.
+//   2. Require the upstream tool. A missing upstream tool fails the run.
+//   3. Run both tools with the same arguments and compare stdout, stderr, and the exit code.
+//
+// The case table holds one case per line. A line that starts with "match" is a
+// case whose stdout, stderr, and exit code must be identical to the upstream
+// tool. A line that starts with "differ" is a declared deviation. The exit
+// code must be identical and the output may differ. The run fails when a match
+// case differs, when a differ case has a different exit code, or when the
+// table holds no match case at all.
+//
+// The runner lives in every tool repository and is the same file everywhere,
+// so the comparison never drifts between the repositories.
+//
+// The Academy header of this file keeps all four elements in the first seven
+// lines. The fleet Makefile reads the header of every page with head -7, so a
+// longer header would fail the academy check of the fleet.
+//
+// The runner is written in openOODA and holds no shell script file. The shell
+// is used only to run one tool with one argument list and to capture the
+// output. Every word is wrapped in single quotes, so a word that holds a
+// shell metacharacter is inert.
+
+import "std/core/text/num_buffer.oo";
+import "std/fs/os/fs.oo";
+
+// The count of the three kinds of case.
+type ParityCount = struct {
+    matches: Int,
+    devs: Int,
+    skips: Int,
+    fails: Int
+};
+
+// Split a line into words. A word may be wrapped in double quotes so it can
+// hold a space.
+fn parity_words(line: String) -> List[String] {
+    let mut out: List[String] = list_new();
+    let mut cur: String = "";
+    let mut in_quotes: Bool = false;
+    let mut has: Bool = false;
+    let n: Int = chars_len(line);
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(line, i);
+        if c == "\"" {
+            in_quotes = !in_quotes;
+            has = true;
+        } else if c == " " && !in_quotes {
+            if has { out = list_push(out, cur); cur = ""; has = false; }
+        } else {
+            cur = cur + c;
+            has = true;
+        }
+        i = i + 1;
+    }
+    if has { out = list_push(out, cur); }
+    return out;
+}
+
+// Wrap a word in single quotes so the shell reads it as one plain word. A
+// single quote inside the word is closed, escaped, and reopened.
+fn parity_quote(s: String) -> String {
+    let mut out: String = "'";
+    let n: Int = chars_len(s);
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(s, i);
+        if c == "'" { out = out + "'\\''"; } else { out = out + c; }
+        i = i + 1;
+    }
+    return out + "'";
+}
+
+// Split a file into lines.
+fn parity_lines(s: String) -> List[String] {
+    let mut out: List[String] = list_new();
+    let mut cur: String = "";
+    let n: Int = chars_len(s);
+    let mut i: Int = 0;
+    while i < n {
+        let c: String = char_at(s, i);
+        if c == "\n" {
+            out = list_push(out, cur);
+            cur = "";
+        } else {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    out = list_push(out, cur);
+    return out;
+}
+
+// Remove the spaces and the tabs at both ends of a string.
+fn parity_trim(s: String) -> String {
+    let n: Int = chars_len(s);
+    let mut start: Int = 0;
+    while start < n {
+        let c: String = char_at(s, start);
+        if c != " " && c != "\t" { break; }
+        start = start + 1;
+    }
+    let mut end: Int = n;
+    while end > start {
+        let c: String = char_at(s, end - 1);
+        if c != " " && c != "\t" { break; }
+        end = end - 1;
+    }
+    if end <= start { return ""; }
+    return str_slice(s, start, end);
+}
+
+// Run one tool with the given arguments. The stdout and the stderr go to
+// files and the standard input is closed, so a tool that reads the input
+// never waits for it. The run is bounded by the timeout helper, so a tool
+// that follows a file cannot hold the gate. A case that carries its own
+// bound uses that bound, so the upstream is given the same time as the tool.
+fn parity_run(sys: &ProcessCap, tool: String, words: List[String], from: Int, out_path: String, err_path: String) -> Int {
+    let mut secs: String = "10";
+    let mut first: Int = from;
+    if list_get(words, from) == "timeout" && from + 1 < list_len(words) {
+        secs = list_get(words, from + 1);
+        first = from + 2;
+    }
+    let mut script: String = "t=''; command -v timeout >/dev/null 2>&1 && t='timeout " + secs + "'; $t ";
+    script = script + parity_quote(tool);
+    let mut i: Int = first;
+    while i < list_len(words) {
+        script = script + " " + parity_quote(list_get(words, i));
+        i = i + 1;
+    }
+    script = script + " > " + parity_quote(out_path) + " 2> " + parity_quote(err_path) + " < /dev/null";
+    let mut argv: List[String] = list_new();
+    argv = list_push(argv, "-c");
+    argv = list_push(argv, script);
+    let r: Result[Int, String] = sys_exec_wait(sys, "sh", argv);
+    let mut code: Int = 127;
+    if r.is_ok() { code = r.val; }
+    return code;
+}
+
+// Compare the two results of one case. The returned string is "ok" when the
+// case passes, "skip" when the upstream does not know the arguments, and
+// otherwise the reason the case fails.
+fn parity_compare(fs_r: &FsReadCap, up_rc: Int, oo_rc: Int, kind: String) -> String {
+    let r1: Result[String, String] = fs_read_file(fs_r, ".ooda-cache/parity/up.out");
+    let mut up_out: String = "";
+    if r1.is_ok() { up_out = r1.val; }
+    let r2: Result[String, String] = fs_read_file(fs_r, ".ooda-cache/parity/oo.out");
+    let mut oo_out: String = "";
+    if r2.is_ok() { oo_out = r2.val; }
+    let r3: Result[String, String] = fs_read_file(fs_r, ".ooda-cache/parity/up.err");
+    let mut up_err: String = "";
+    if r3.is_ok() { up_err = r3.val; }
+    let r4: Result[String, String] = fs_read_file(fs_r, ".ooda-cache/parity/oo.err");
+    let mut oo_err: String = "";
+    if r4.is_ok() { oo_err = r4.val; }
+    if str_contains(up_err, "unrecognized option") { return "skip"; }
+    if str_contains(up_err, "unknown option") { return "skip"; }
+    if str_contains(up_err, "invalid option") { return "skip"; }
+    if str_contains(up_err, "unrecognized command") { return "skip"; }
+    if str_contains(up_err, "invalid argument") { return "skip"; }
+    if str_contains(up_err, "illegal option") { return "skip"; }
+    // A run that was cut short by the bound did not finish. The upstream
+    // cannot be the reference for a case it never completes, so the case is
+    // skipped. A tool that does not finish while the upstream does is a
+    // defect and fails the case.
+    if up_rc == 124 { return "skip"; }
+    if oo_rc == 124 { return "the tool does not finish"; }
+    if up_rc != oo_rc { return "exit code " + int_to_str(up_rc) + " against " + int_to_str(oo_rc); }
+    if kind == "match" {
+        if up_out != oo_out { return "stdout differs"; }
+        if up_err != oo_err { return "stderr differs"; }
+    }
+    return "ok";
+}
+
+// Run every case of the case table and count the results.
+fn parity_cases(sys: &ProcessCap, fs_r: &FsReadCap, lines: List[String], upstream: String, tool: String) -> ParityCount {
+    let mut c: ParityCount = ParityCount { matches: 0, devs: 0, skips: 0, fails: 0 };
+    let mut i: Int = 0;
+    while i < list_len(lines) {
+        let l: String = parity_trim(list_get(lines, i));
+        i = i + 1;
+        if l == "" || str_starts_with(l, "#") { continue; }
+        let words: List[String] = parity_words(l);
+        if list_len(words) < 2 { continue; }
+        let kind: String = list_get(words, 0);
+        if kind != "match" && kind != "differ" { continue; }
+        let up_rc: Int = parity_run(sys, upstream, words, 1, ".ooda-cache/parity/up.out", ".ooda-cache/parity/up.err");
+        let oo_rc: Int = parity_run(sys, tool, words, 1, ".ooda-cache/parity/oo.out", ".ooda-cache/parity/oo.err");
+        let verdict: String = parity_compare(fs_r, up_rc, oo_rc, kind);
+        if verdict == "ok" {
+            if kind == "match" { c.matches = c.matches + 1; } else { c.devs = c.devs + 1; }
+        } else if verdict == "skip" {
+            c.skips = c.skips + 1;
+        } else {
+            c.fails = c.fails + 1;
+            println("  FAIL " + kind + " [" + l + "] " + verdict);
+        }
+    }
+    return c;
+}
+
+// Read the case table, run every case, and report the parity result.
+pub fn main(sys: &ProcessCap, fs_r: &FsReadCap, fs_w: &FsWriteCap, env: &EnvCap) -> Int {
+    let cases_path: String = "qa/parity/cases.oot";
+    let r: Result[String, String] = fs_read_file(fs_r, cases_path);
+    if r.is_err() { println("ERR\tparity\tcannot read " + cases_path); return 1; }
+    let _d: Result[Void, String] = fs_mkdir_p(fs_w, ".ooda-cache/parity");
+    let lines: List[String] = parity_lines(r.val);
+    let mut upstream: String = "";
+    let mut tool_rel: String = "";
+    let mut i: Int = 0;
+    while i < list_len(lines) {
+        let l: String = parity_trim(list_get(lines, i));
+        if str_starts_with(l, "# upstream:") { upstream = parity_trim(str_slice(l, 11, chars_len(l))); }
+        if str_starts_with(l, "# tool:") { tool_rel = parity_trim(str_slice(l, 7, chars_len(l))); }
+        i = i + 1;
+    }
+    if upstream == "" { println("ERR\tparity\tno upstream in " + cases_path); return 1; }
+    if tool_rel == "" { println("ERR\tparity\tno tool in " + cases_path); return 1; }
+    let probe: Result[String, String] = sys_exec(sys, "sh", "-c", "command -v " + parity_quote(upstream));
+    if probe.is_err() {
+        println("ERR\tparity\tupstream tool " + upstream + " is not installed. The parity gate cannot pass without it.");
+        return 1;
+    }
+    let tool: String = if str_starts_with(tool_rel, "/") { tool_rel } else { "./" + tool_rel };
+    let c: ParityCount = parity_cases(sys, fs_r, lines, upstream, tool);
+    println("PARITY " + tool + " against " + upstream + " match=" + int_to_str(c.matches)
+        + " differ=" + int_to_str(c.devs) + " skip=" + int_to_str(c.skips)
+        + " fail=" + int_to_str(c.fails));
+    if c.matches == 0 { println("ERR\tparity\tno match case against " + upstream + "."); return 1; }
+    if c.fails > 0 { return 1; }
+    return 0;
+}
