@@ -11,7 +11,7 @@ BINDIR ?= $(PREFIX)/bin
 SRC := $(wildcard *.oo) $(wildcard */*.oo)
 VERSION ?= 0.1.0
 
-.PHONY: build check line-cap file-law academy density verify clean test package package-deb package-rpm package-arch install uninstall
+.PHONY: build check line-cap file-law academy density verify clean test package package-deb package-rpm package-arch install uninstall parity
 
 build: $(BIN)
 
@@ -99,7 +99,13 @@ check:
 
 verify: line-cap file-law academy density check
 
-test: $(BIN)
+parity: $(BIN)
+	@mkdir -p .ooda-cache .ooda-cache/parity
+	$(OODA_COMPILER) build qa/parity/run.oo -o .ooda-cache/parity-run
+	@chmod +x .ooda-cache/parity-run
+	@.ooda-cache/parity-run
+
+test: $(BIN) parity
 	@echo "=== testing --help ==="
 	@./$(BIN) --help > /dev/null && echo "PASS: --help"
 	@echo "=== testing --version ==="
