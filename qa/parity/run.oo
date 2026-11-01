@@ -116,15 +116,25 @@ fn parity_trim(s: String) -> String {
 }
 
 // Run one tool with the given arguments. The stdout and the stderr go to
-// files. The returned number is the exit code of the tool.
+// files and the standard input is closed, so a tool that reads the input
+// never waits for it. The run is bounded by the timeout helper, so a tool
+// that follows a file cannot hold the gate. A case that carries its own
+// bound uses that bound, so the upstream is given the same time as the tool.
 fn parity_run(sys: &ProcessCap, tool: String, words: List[String], from: Int, out_path: String, err_path: String) -> Int {
-    let mut script: String = parity_quote(tool);
-    let mut i: Int = from;
+    let mut secs: String = "10";
+    let mut first: Int = from;
+    if list_get(words, from) == "timeout" && from + 1 < list_len(words) {
+        secs = list_get(words, from + 1);
+        first = from + 2;
+    }
+    let mut script: String = "t=''; command -v timeout >/dev/null 2>&1 && t='timeout " + secs + "'; $t ";
+    script = script + parity_quote(tool);
+    let mut i: Int = first;
     while i < list_len(words) {
         script = script + " " + parity_quote(list_get(words, i));
         i = i + 1;
     }
-    script = script + " > " + parity_quote(out_path) + " 2> " + parity_quote(err_path);
+    script = script + " > " + parity_quote(out_path) + " 2> " + parity_quote(err_path) + " < /dev/null";
     let mut argv: List[String] = list_new();
     argv = list_push(argv, "-c");
     argv = list_push(argv, script);
@@ -156,6 +166,12 @@ fn parity_compare(fs_r: &FsReadCap, up_rc: Int, oo_rc: Int, kind: String) -> Str
     if str_contains(up_err, "unrecognized command") { return "skip"; }
     if str_contains(up_err, "invalid argument") { return "skip"; }
     if str_contains(up_err, "illegal option") { return "skip"; }
+    // A run that was cut short by the bound did not finish. The upstream
+    // cannot be the reference for a case it never completes, so the case is
+    // skipped. A tool that does not finish while the upstream does is a
+    // defect and fails the case.
+    if up_rc == 124 { return "skip"; }
+    if oo_rc == 124 { return "the tool does not finish"; }
     if up_rc != oo_rc { return "exit code " + int_to_str(up_rc) + " against " + int_to_str(oo_rc); }
     if kind == "match" {
         if up_out != oo_out { return "stdout differs"; }
